@@ -12,26 +12,28 @@ class SymbolRules:
     stops_level_points: int
 
 RULES = {
-    "gold": SymbolRules(100.0, 0.01, 0.01, 100.0, 2, 20),  # XAUUSD
-    "btc":  SymbolRules(1.0,   0.01, 0.01, 100.0, 2, 0),   # BTCUSD
+    "gold": SymbolRules(100.0, 0.01, 0.01, 100.0, 2, 20),
+    "btc":  SymbolRules(1.0,   0.01, 0.01, 100.0, 2, 0),
+    "nas100": SymbolRules(1.0, 0.01, 0.01, 500, 2, 50), # NAS100
+    "dj30": SymbolRules(1.0, 0.01, 0.01, 500, 2, 0), #DJ30 or US30
 }
 
-def point_size(digits: int) -> float:
-    return 10 ** (-digits)
+def point_size(d):
+    return 10 ** (-d)
 
-def min_stop_distance(r: SymbolRules) -> float:
+def min_stop_distance(r):
     return r.stops_level_points * point_size(r.digits)
 
-def round_price(x: float, digits: int) -> float:
-    return round(x, digits)
+def round_price(x, d):
+    return round(x, d)
 
-def round_down(x: float, step: float) -> float:
+def round_down(x, step):
     return math.floor(x / step) * step
 
-def clamp(x: float, lo: float, hi: float) -> float:
+def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
-def get_float_retry(prompt: str, *, min_value: float | None = None) -> float:
+def get_float_retry(prompt, *, min_value=None):
     while True:
         raw = input(prompt).strip()
         try:
@@ -42,7 +44,7 @@ def get_float_retry(prompt: str, *, min_value: float | None = None) -> float:
         except ValueError:
             print("  ❌ Invalid number, try again.")
 
-def get_float_default(prompt: str, default: float) -> float:
+def get_float_default(prompt, default):
     raw = input(prompt).strip()
     if raw == "":
         return default
@@ -52,21 +54,30 @@ def get_float_default(prompt: str, default: float) -> float:
         print("  ❌ Invalid number, using default.")
         return default
 
-def get_symbol_default_gold() -> tuple[str, SymbolRules]:
-    raw = input("Symbol [gold/btc] (default gold): ").strip().lower()
-    sym = raw if raw in RULES else "gold"
-    return sym, RULES[sym]
+# 🔒 SAFE symbol input
+def get_symbol():
+    while True:
+        raw = input("Symbol [gold/btc] (default gold): ").strip().lower()
+        if raw == "":
+            return "gold", RULES["gold"]
+        if raw in RULES:
+            return raw, RULES[raw]
+        print("  ❌ Invalid symbol. Enter 'gold' or 'btc'.")
 
-def get_side_default_buy() -> str:
+def get_side_default_buy():
     raw = input("Side [buy/sell] (default buy): ").strip().lower()
-    if raw == "":
+    if raw in ("", "buy"):
         return "buy"
-    if raw in ("buy", "sell"):
-        return raw
+    if raw == "sell":
+        return "sell"
     print("  ❌ Invalid side, defaulting to BUY.")
     return "buy"
 
-def get_valid_entry_stop(side: str, rules: SymbolRules) -> tuple[float, float]:
+def get_risk_input():
+    mode = input("Risk mode [%/$] (default %): ").strip().lower()
+    return mode if mode in ("$", "d") else "%"
+
+def get_valid_entry_stop(side, rules):
     entry = round_price(get_float_retry("Entry price: ", min_value=0), rules.digits)
 
     while True:
@@ -75,11 +86,9 @@ def get_valid_entry_stop(side: str, rules: SymbolRules) -> tuple[float, float]:
         if stop == entry:
             print("  ❌ Stop cannot equal entry.")
             continue
-
         if side == "buy" and stop >= entry:
             print("  ❌ BUY stop must be BELOW entry.")
             continue
-
         if side == "sell" and stop <= entry:
             print("  ❌ SELL stop must be ABOVE entry.")
             continue
@@ -87,7 +96,7 @@ def get_valid_entry_stop(side: str, rules: SymbolRules) -> tuple[float, float]:
         dist = abs(entry - stop)
         msd = min_stop_distance(rules)
         if msd > 0 and dist < msd:
-            print(f"  ❌ Stop too close. Min distance is {msd:g} (Stops level {rules.stops_level_points} points).")
+            print(f"  ❌ Stop too close. Min distance is {msd:g}.")
             continue
 
         return entry, stop
@@ -95,22 +104,26 @@ def get_valid_entry_stop(side: str, rules: SymbolRules) -> tuple[float, float]:
 def main():
     print("\n=== Fast Risk Calculator (PU Prime) ===\n")
 
-    symbol, rules = get_symbol_default_gold()
+    symbol, rules = get_symbol()
     side = get_side_default_buy()
 
-    equity = get_float_retry("Equity ($): ", min_value=0)
+    # --- Risk selection ---
+    risk_mode = get_risk_input()
 
-    # Defaults
-    risk_pct = get_float_default("Risk % [1]: ", 1.0)
-    rr       = get_float_default("Risk:Reward [2]: ", 2.0)
+    if risk_mode == "%":
+        equity = get_float_retry("Equity ($): ", min_value=0)
+        risk_pct = get_float_default("Risk % [1]: ", 1.0)
+        risk_dollars = equity * (risk_pct / 100.0)
+    else:
+        equity = None
+        risk_dollars = get_float_retry("Risk amount ($): ", min_value=0)
 
-    # Entry/Stop with guaranteed validation
+    rr = get_float_default("Risk:Reward [2]: ", 2.0)
+
     entry, stop = get_valid_entry_stop(side, rules)
 
-    # Core math
+    # --- Core math ---
     stop_distance = abs(entry - stop)
-    risk_dollars = equity * (risk_pct / 100.0)
-
     loss_per_1_lot = stop_distance * rules.contract_size
     raw_lot = risk_dollars / loss_per_1_lot
 
@@ -132,9 +145,9 @@ def main():
     print(f"Lot:   {lot:.2f}")
     print(f"Risk used: ${risk_used:.2f}")
 
-    if raw_lot < rules.min_lot:
-        min_risk_pct = (risk_used / equity) * 100.0
-        print(f"\n⚠ Min lot forces risk ≈ {min_risk_pct:.2f}%")
+    if risk_mode == "%" and risk_used > risk_dollars * 1.01:
+        actual_pct = (risk_used / equity) * 100
+        print(f"\n⚠ Actual risk ≈ {actual_pct:.2f}% (min volume constraint)")
 
 if __name__ == "__main__":
     main()
